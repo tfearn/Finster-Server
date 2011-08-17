@@ -379,6 +379,3 @@ def gettrending(request):
 		res['trendingList'].append(trending)
 
 	return HttpResponse(simplejson.dumps(res), content_type='application/json')
-
-def googlevalidation(request):
-	return HttpResponse('google-site-verification: google40febd99cdcebef8.html', content_type='text/html')
