@@ -6,6 +6,7 @@ import logging
 import sys
 import zmq
 from datetime import datetime
+import smtplib
 
 class FinsterLogger(object):
 	def __init__(self):
@@ -43,7 +44,8 @@ def fb_login_required(f):
                                     		    	image="http://graph.facebook.com/%s/picture" % (fbUser['id'],),
                                     		    	facebookid=fbUser['id'],
                                     		    	firstname=fbUser['first_name'],
-                                    		    	lastname=fbUser['last_name'])
+                                    		    	lastname=fbUser['last_name'],
+							points=0)
                         		request.user.save()
 					logger.log("Created User", request)
 			except GraphAPIError as ge:
@@ -74,3 +76,32 @@ def put_wall_post(request,message):
 	except GraphAPIError as e:
 		print >> sys.stderr, 'Facebook error: %s', (e, )
         	sys.stderr.flush()
+
+def get_friends(request):
+	try:
+		graph = GraphAPI(request.user.accesstoken)
+		user = graph.get_object('me')
+		friends = graph.get_connections(user["id"], "friends")
+		return friends
+	except GraphAPIError as e:
+		print >> sys.stderr, 'Facebook error: %s', (e, )
+		sys.stderr.flush()
+
+def send_email(recipient, username, follower):
+	try:
+                fromaddr = 'noreply@finster.mobi'
+                subject = "You are being followed on Finster"
+                message = "%s,\r\n\r\nYou are now being followed by [%s] on Finster." % (username,follower)
+		message = message + "\r\n\r\nAll the best!\r\nFinster\r\nhttp://twitter.com/finsterapp"
+                
+		server = smtplib.SMTP_SSL('smtp.gmail.com', 465)
+                server.set_debuglevel(True)
+                server.ehlo()
+                server.login('noreply@finster.mobi','dogman1234')
+                m = "From: %s\r\nTo: %s\r\nSubject: %s\r\nX-Mailer: My-Mail\r\n\r\n" % (fromaddr, [recipient], subject)
+                server.sendmail(fromaddr, [recipient], m+message)
+                server.quit()
+	except Exception as e:
+		print >> sys.stderr, str(e)
+		sys.stderr.flush()
+

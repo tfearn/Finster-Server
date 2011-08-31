@@ -13,6 +13,7 @@ class User(models.Model):
 	bio = models.TextField()
 	following = models.ManyToManyField('self', symmetrical=False)
 	accesstoken = models.CharField(max_length=1000, db_index=True)
+	points = models.IntegerField()
 
         def __unicode__(self):
                 return self.name

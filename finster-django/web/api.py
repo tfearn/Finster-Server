@@ -3,7 +3,7 @@ from django.db import connection, transaction
 from django.utils import simplejson
 from django.db.models import Q
 from models import Checkin, User
-from finster import fb_login_required, put_wall_post, FinsterLogger
+from finster import fb_login_required, put_wall_post, FinsterLogger, get_friends, send_email
 from datetime import datetime, timedelta
 import sys
 
@@ -16,43 +16,6 @@ CHECKINTYPE = { '1':'I Bought',
 
 @fb_login_required
 def getcheckins(request):
-	"""
-	This method retrieves checkins (e.g. Wall). The GET parameters are:
-	
-		start = starting record (0-based). For paging on the device.
-		limit = number of records to retrieve
-		feed = which feed(s) to retrieve (comma-separated)
-		       current values: 	you = just the authenticated user's checkins
-				   	friends = the checkins from people that a user follows
-					user = checkins for a user
-		userid = limit checkins to this userid (for feed = user)	
-		type = (optional) limit to a particular type (e.g. CheckInTypeIBought, 
-				CheckInTypeISold, CheckInTypeShouldIBuy, CheckInTypeShouldISell, 
-				CheckInTypeImBullish, CheckInTypeImBearish, CheckInTypeImThinking)
-		ticker = (optional) only checkins for this ticker will be returned
-			
-	returns a JSON dictionary of checkins:
-
-		{ "checkInList": 
-		      [{"id": 11,
-			"comment": "", 
-	  		"timestamp": "2011-05-12 19:59:38 UTC", 
-	  		"user": {	
-	  			"image": "http://graph.facebook.com/johndoe/picture", 
-	  			"group": "friend", 
-	  			"id": "123412341", 
-	  			"name": "John Doe" 
-	  		}, 
-	  		"type": "CheckInTypeImBearish", 
-	  		"ticker": {
-	  			"symbol": "YHOO", 
-	  			"exchange": "NASDAQ", 
-	  			"type": "Equity", 
-	  			"symbolName": "Yahoo! Inc."
-	  		}, 
-			}]
-		}	
-	"""	
 	user = request.user
 	start = int(request.GET.get('start', 0))
 	limit = start + int(request.GET.get('limit', 100))
@@ -74,7 +37,7 @@ def getcheckins(request):
 	elif 'friends' in feed:
 		checkins = checkins.filter(user__in=user.following.all())
 
-	friends = User.objects.all().filter(user__in=user.following.all())
+	friends = User.objects.all().filter(id__in=user.following.all())
 
 	if checkInType:
 		checkins = checkins.filter(checkInType__exact=checkInType)
@@ -109,7 +72,7 @@ def getcheckins(request):
                      			#'following': checkin.user.following.all().count(),
                      			#'checkins': num_checkins,
                      			#'badges': 0,
-					#'points': num_checkins * 2, 
+					'points': checkin.user.points, 
 					},
 				'ticker':{
 					'symbol':checkin.ticker,
@@ -123,34 +86,6 @@ def getcheckins(request):
 
 @fb_login_required
 def checkin(request):
-	"""
-        This method will checkin a user to a topic. The GET parameters are:
-        
-                type =  CheckinInTypeIBought, 
-                        CheckInTypeISold, 
-                        CheckInTypeShouldIBuy, 
-                        CheckInTypeShouldISell, 
-                        CheckInTypeImBullish, 
-                        CheckInTypeImBearish, 
-                        CheckInTypeImThinking
-                symbol = The symbol of the security
-                symbolName = The name of the symbol (e.g. company)
-                symbolType = Type of asset (e.g. Equity, Bond, Option)
-                exchange = The exchange were the asset is traded
-                comment = A comment from the user (optional)
-		sharetwitter = if set to 1 and the user has a twitter account, tweet a message
-                sharefacebook = if set to 1, post to facebook wall
-
-	returns a JSON dictionary
-
-	         checkInsForTicker = The number of CheckIns by type for a ticker by the logged in User.
-                 otherCheckInsForTicker = The number of CheckIns by type for a ticker by all Users in the last 30 days.
-                 otherTickerInterest = The number of CheckIns by all type(s) for a ticker by all Users in the last 30 days.
-                 pointsEarned = The number of points earned for a CheckIn.
-                 totalPoints = The total points earned by the logged in User.
-                 badgeID = The id of the badge earned for this CheckIn.
-
-	"""
 	user = request.user
 	ticker = request.GET['symbol']
 	checkInType = request.GET['type']
@@ -169,7 +104,11 @@ def checkin(request):
 			  symbolExchange=request.GET.get('exchange', ''))
 	checkin.save()
 
-	if request.GET.get('sharefacebook', 0):
+	# 2 points per checkin for now
+	user.points = user.points + 2;
+	user.save()
+
+	if request.GET.get('sharefacebook', 0) and not user.id == 1:
 		fbmsg = "%s %s" % (CHECKINTYPE[checkInType], ticker)
 		if symbolName: fbmsg = "%s (%s)" % (fbmsg,symbolName)
 		if comment: fbmsg = '%s "%s"' % (fbmsg,comment)
@@ -178,10 +117,10 @@ def checkin(request):
 	thirtydaysago = datetime.today() - timedelta(days=30)
 
 	jsonresponse = { 'checkInsForTicker': Checkin.objects.filter(user=user).filter(ticker__iexact=ticker).filter(checkInType__iexact=checkInType).count(),
-			 'otherCheckInsForTicker': Checkin.objects.filter(ticker__exact=ticker).filter(checkInType__iexact=checkInType).filter(created__gte=thirtydaysago).count(),
-			 'otherTickerInterest': Checkin.objects.filter(ticker__exact=ticker).filter(created__gte=thirtydaysago).count(),
+			 'otherCheckInsForTicker': Checkin.objects.exclude(user=user).filter(ticker__exact=ticker).filter(checkInType__iexact=checkInType).filter(created__gte=thirtydaysago).count(),
+			 'otherTickerInterest': Checkin.objects.exclude(user=user).filter(ticker__exact=ticker).filter(created__gte=thirtydaysago).count(),
 			 'pointsEarned': 2,
-			 'totalPoints': Checkin.objects.filter(user=user).count() * 2,
+			 'totalPoints': user.points,
 			 'badgeID': 0 }
 
 	return HttpResponse(simplejson.dumps(jsonresponse), content_type='application/json')
@@ -199,19 +138,14 @@ def loginwithfb(request):
 
 @fb_login_required
 def follow(request):
-	"""
-	Follows a user. The parameter is 'userid' = the id of the user to follow
-	"""
 	user = request.user
 	following = User.objects.get(pk=int(request.GET.get('userid',0)))
 	user.following.add(following)		
+	send_email(following.email,following.name, user.name)
 	return HttpResponse("follow")
 
 @fb_login_required
 def unfollow(request):
-	"""
-	Unfollow a user. The the parameter 'userid' = the id of the user to unfollow
-	"""
 	user = request.user
         following = User.objects.get(pk=int(request.GET.get('userid',0)))
         user.following.remove(following)
@@ -220,21 +154,28 @@ def unfollow(request):
 @fb_login_required
 def finduser(request):
 	searchfor = request.GET.get('search', '')
-	users = User.objects.filter(name__icontains=searchfor)
+	users = User.objects.filter(name__icontains=searchfor).exclude(id=request.user.id)
 	
 	jsonresp = {'searchresults':[]}
 	
 	for user in users:
+		group = 'network'
+        	if user.id == request.user.id:
+                	group = 'you'
+        	elif user in request.user.following.all():
+                	group = 'friend'
+
 		userNode = {'user':{
         	     	    	'id': user.id,
                      		'name': user.name,
+				'group': group,
                      		'slogan': user.slogan,
                      		'bio': user.bio,
                      		'image': user.image,
                      		'followers': User.objects.all().filter(following=user).count(),
                      		'following': user.following.all().count(),
                      		'checkins': Checkin.objects.filter(user=user).count(),
-                     		'points': Checkin.objects.filter(user=user).count() * 2,
+                     		'points': user.points,
                      		'badges': 0 }}
 
 		jsonresp['searchresults'].append(userNode)
@@ -243,41 +184,48 @@ def finduser(request):
 
 @fb_login_required
 def getuser(request):
-	"""
-	Get the details of a user given the GET parameter:
-		user = id of the user
-
-	If no user parameter is sent, the authenticated user's profile is sent
-
-	Returns a dictionary:
-
-		id		The user ID
-		name		The username
-		slogan		The user's slogan
-		bio		The user's bio
-		image		Url of the user's image
-		followers	The number of people following this user
-		following	The number of people this user is following
-		checkins	The total number of checkins
-		badges	The number of badges acquired by this user
-
-	"""
 	userid = int(request.GET.get('userid', 0))
 	if userid:
 		user = User.objects.get(pk=userid)
  	else:
 		user = request.user
-		
+
+	group = 'network'
+	if user.id == request.user.id:
+        	group = 'you'
+        elif user in request.user.following.all():
+                group = 'friend'
+
 	jsonresp = { 'id': user.id,
 		     'name': user.name,
+		     'group': group,
 		     'slogan': user.slogan,
 		     'bio': user.bio,
 		     'image': user.image,
 		     'followers': User.objects.all().filter(following=user).count(),
 		     'following': user.following.all().count(),
 		     'checkins': Checkin.objects.filter(user=user).count(),
-		     'points': Checkin.objects.filter(user=user).count() * 2,
-		     'badges': 0 }
+		     'points': user.points,
+		     'badges': 0, }
+
+	return HttpResponse(simplejson.dumps(jsonresp), content_type='application/json')
+
+@fb_login_required
+def getleaderboard(request):
+	leaders = User.objects.filter(Q(id__in=request.user.following.all()) | Q(id=request.user.id)).order_by('-points')
+	jsonresp = { 'leaderboard': [] }
+        for leader in leaders:
+        	userNode = {'user':{
+                             'id': leader.id,
+                             'name': leader.name,
+                             'image': leader.image,
+                             'followers': 0, #User.objects.all().filter(following=leader).count(),
+                             'following': 0, #leader.following.all().count(),
+                             'checkins': 0, #Checkin.objects.filter(user=leader).count(),
+                             'points': leader.points,
+                             'badges': 0 }}
+
+                jsonresp['leaderboard'].append(userNode)
 
 	return HttpResponse(simplejson.dumps(jsonresp), content_type='application/json')
 
@@ -305,7 +253,7 @@ def getuserfollowing(request):
                                         'followers': User.objects.all().filter(following=following_user).count(),
                                         'following': following_user.following.all().count(),
                                         'checkins': Checkin.objects.filter(user=following_user).count(),
-					'points': Checkin.objects.filter(user=user).count() * 2,
+					'points': following_user.points,
                                         'badges': 0                                        
 					}
                                  }
@@ -337,7 +285,7 @@ def getuserfollowers(request):
                                         'followers': User.objects.all().filter(following=follower_user).count(),
                                         'following': follower_user.following.all().count(),
                                         'checkins': Checkin.objects.filter(user=follower_user).count(),
-                                        'points': Checkin.objects.filter(user=user).count() * 2,
+                                        'points': follower_user.points,
 					'badges': 0
                                         }
                                  }
@@ -379,3 +327,54 @@ def gettrending(request):
 		res['trendingList'].append(trending)
 
 	return HttpResponse(simplejson.dumps(res), content_type='application/json')
+
+@fb_login_required
+def getuserlastcheckins(request):
+        userid = int(request.GET.get('userid', 0))
+        if userid:
+                user = User.objects.get(pk=userid)
+        else:
+                user = request.user
+
+	cursor = connection.cursor()
+        cursor.execute('select max(id) as id from web_checkin where user_id = %d group by ticker limit 50' % (user.id,))
+        ids = [row[0] for row in cursor.fetchall()]
+
+	checkins = Checkin.objects.filter(id__in=ids).order_by('-created')
+
+	checkInList = { 'checkInList':[] }
+        for checkin in checkins:
+                if checkin.user.id == request.user.id:
+                        group = 'you'
+                elif checkin.user.id in request.user.following.all():
+                        group = 'friend'
+                else:
+                        group = 'network'
+
+                checkInNode = { 'id': checkin.id,
+                                'timestamp': checkin.created.strftime('%Y-%m-%d %H:%M:%S UTC'),
+                                'type': checkin.checkInType,
+                                'comment': checkin.comment,
+                                'user':{
+                                        'id':checkin.user.id,
+                                        'name':checkin.user.name,
+                                        'group':group,
+                                        'image':checkin.user.image,
+                                        'points': checkin.user.points,
+                                        },
+                                'ticker':{
+                                        'symbol':checkin.ticker,
+                                        'symbolName':checkin.symbolName,
+                                        'type':checkin.symbolType,
+                                        'exchange':checkin.symbolExchange
+                                        }}
+                checkInList['checkInList'].append(checkInNode)
+
+	return HttpResponse(simplejson.dumps(checkInList), content_type='application/json')	
+
+@fb_login_required
+def getfriends(request):
+	res = { 'friends': [] } 
+	res['friends'] = get_friends(request)
+	return HttpResponse(simplejson.dumps(res), content_type='application/json')
+

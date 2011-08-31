@@ -1,5 +1,5 @@
 from django.conf.urls.defaults import *
-from web.api import checkin, getcheckins, getuser, loginwithfb, follow, unfollow, getuserfollowers, getuserfollowing, isfollowinguser, gettrending, finduser, googlevalidation
+from web.api import checkin, getcheckins, getuser, loginwithfb, follow, unfollow, getuserfollowers, getuserfollowing, isfollowinguser, gettrending, finduser, getfriends, getleaderboard, getuserlastcheckins
 
 # Uncomment the next two lines to enable the admin:
 # from django.contrib import admin
@@ -26,4 +26,7 @@ urlpatterns = patterns('',
     (r'^api/isfollowinguser$', isfollowinguser),
     (r'^api/gettrending$', gettrending),
     (r'^api/finduser$', finduser),
+    (r'^api/getfriends$', getfriends),
+    (r'^api/getleaderboard$', getleaderboard),
+    (r'^api/getuserlastcheckins$', getuserlastcheckins),
 )
